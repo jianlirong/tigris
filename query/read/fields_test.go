@@ -15,6 +15,8 @@
 package read
 
 import (
+	"fmt"
+	"github.com/tigrisdata/tigris/query/aggregation"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -42,4 +44,17 @@ func TestBuildFields(t *testing.T) {
 	f, err = BuildFields([]byte(`{"a": 1, "b": true, "c": {"$avg": "$f1"}, "d": {"$sum": ["$f2", "$f3"]}}`))
 	require.Nil(t, err)
 	require.Equal(t, len(f.Include), 4)
+
+	f, err = BuildFields([]byte(`{"a": 1, "c": {"$avg": "f1"}, "d": {"$count": "f2"}}`))
+	require.Nil(t, err)
+	require.Equal(t, len(f.Include), 3)
+	for _, v := range f.Include {
+		switch ty := v.(type) {
+		case *ExprField:
+			switch k := ty.Expr.(type) {
+			case *aggregation.AccumulatorOp:
+				fmt.Println(k.ToSearch())
+			}
+		}
+	}
 }

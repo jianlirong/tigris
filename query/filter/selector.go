@@ -50,3 +50,19 @@ func (s *Selector) Matches(doc []byte) bool {
 func (s *Selector) String() string {
 	return fmt.Sprintf("{%v:%v}", s.Field, s.Matcher)
 }
+
+func (s *Selector) ToSearchFilter() string {
+	switch s.Matcher.Type() {
+	case EQ:
+		return fmt.Sprintf("%s:=%v", s.Field, s.Matcher.GetValue().AsInterface())
+	case GT:
+		return fmt.Sprintf("%s:>%v", s.Field, s.Matcher.GetValue().AsInterface())
+	case GTE:
+		return fmt.Sprintf("%s:>=%v", s.Field, s.Matcher.GetValue().AsInterface())
+	case LT:
+		return fmt.Sprintf("%s:<%v", s.Field, s.Matcher.GetValue().AsInterface())
+	case LTE:
+		return fmt.Sprintf("%s:<=%v", s.Field, s.Matcher.GetValue().AsInterface())
+	}
+	return ""
+}

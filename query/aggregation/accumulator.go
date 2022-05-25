@@ -16,6 +16,7 @@ package aggregation
 
 import (
 	"fmt"
+	"github.com/tigrisdata/tigris/value"
 
 	jsoniter "github.com/json-iterator/go"
 	"github.com/tigrisdata/tigris/query/expression"
@@ -23,18 +24,20 @@ import (
 
 // supported accumulators
 const (
-	avg = "$avg"
-	min = "$min"
-	max = "$max"
-	sum = "$sum"
+	avg   = "$avg"
+	min   = "$min"
+	max   = "$max"
+	sum   = "$sum"
+	count = "$count"
 )
 
 // AccumulatorFactory to return the object of the accumulator type
 type AccumulatorFactory struct {
-	Avg *AccumulatorOp `json:"$avg,omitempty"`
-	Min *AccumulatorOp `json:"$min,omitempty"`
-	Max *AccumulatorOp `json:"$max,omitempty"`
-	Sum *AccumulatorOp `json:"$sum,omitempty"`
+	Avg   *AccumulatorOp `json:"$avg,omitempty"`
+	Min   *AccumulatorOp `json:"$min,omitempty"`
+	Max   *AccumulatorOp `json:"$max,omitempty"`
+	Sum   *AccumulatorOp `json:"$sum,omitempty"`
+	Count *AccumulatorOp `json:"$count,omitempty"`
 }
 
 func (a *AccumulatorFactory) Get() Aggregation {
@@ -53,6 +56,10 @@ func (a *AccumulatorFactory) Get() Aggregation {
 	if a.Sum != nil {
 		a.Sum.Type = sum
 		return a.Sum
+	}
+	if a.Count != nil {
+		a.Count.Type = count
+		return a.Count
 	}
 	return nil
 }
@@ -77,4 +84,13 @@ func (a *AccumulatorOp) Apply(document jsoniter.RawMessage) {}
 
 func (a *AccumulatorOp) String() string {
 	return fmt.Sprintf(`{"%s": %v}`, a.Type, a.Agg)
+}
+
+func (a *AccumulatorOp) ToSearch() string {
+	switch v := a.Agg.(type) {
+	case *value.StringValue:
+		return fmt.Sprintf(`{"facet_by": "%s"}`, v)
+	default:
+		return ""
+	}
 }

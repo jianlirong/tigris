@@ -15,28 +15,23 @@
 package v1
 
 import (
-	"github.com/fullstorydev/grpchan/inprocgrpc"
-	"github.com/go-chi/chi/v5"
+	"context"
+	"github.com/tigrisdata/tigris/server/transaction"
 	"github.com/tigrisdata/tigris/store/kv"
-	"github.com/tigrisdata/tigris/store/search"
-	"google.golang.org/grpc"
 )
 
-type ContentType string
-
-const (
-	JSON ContentType = "application/json"
-)
-
-type Service interface {
-	RegisterHTTP(router chi.Router, inproc *inprocgrpc.Channel) error
-	RegisterGRPC(grpc *grpc.Server) error
+type TxListener interface {
+	OnCommit(context.Context, transaction.Tx, kv.EventListener) error
+	OnPostCommit(context.Context, kv.EventListener) error
+	OnRollback(context.Context, kv.EventListener)
 }
 
-func GetRegisteredServices(kvStore kv.KeyValueStore, searchStore search.Store) []Service {
-	var v1Services []Service
+type NoopTxListener struct{}
 
-	v1Services = append(v1Services, newApiService(kvStore, searchStore))
-	v1Services = append(v1Services, newHealthService())
-	return v1Services
+func (l *NoopTxListener) OnCommit(context.Context, transaction.Tx, kv.EventListener) error {
+	return nil
 }
+func (l *NoopTxListener) OnPostCommit(context.Context, kv.EventListener) error {
+	return nil
+}
+func (l *NoopTxListener) OnRollback(context.Context, kv.EventListener) {}

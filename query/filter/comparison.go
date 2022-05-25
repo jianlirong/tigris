@@ -22,8 +22,11 @@ import (
 )
 
 const (
-	EQ = "$eq"
-	GT = "$gt"
+	EQ  = "$eq"
+	GT  = "$gt"
+	LT  = "$lt"
+	GTE = "$gte"
+	LTE = "$lte"
 )
 
 // ValueMatcher is an interface that has method like Matches.

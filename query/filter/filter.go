@@ -46,6 +46,7 @@ var (
 type Filter interface {
 	// Matches returns true if the input doc passes the filter, otherwise false
 	Matches(doc []byte) bool
+	ToSearchFilter() string
 }
 
 func IsFullCollectionScan(reqFilter []byte) bool {

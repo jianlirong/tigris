@@ -65,3 +65,7 @@ func (a *ArithmeticOp) Apply(document jsoniter.RawMessage) {}
 func (a *ArithmeticOp) String() string {
 	return fmt.Sprintf(`{"%s": %v}`, a.Type, a.Agg)
 }
+
+func (a *ArithmeticOp) ToSearch() string {
+	return ""
+}

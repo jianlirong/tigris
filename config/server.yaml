@@ -19,4 +19,4 @@ log:
   level: trace
 
 foundationdb:
-  cluster_file: "/etc/foundationdb/fdb.cluster"
+  cluster_file: "/usr/local/etc/foundationdb/fdb.cluster"#"/etc/foundationdb/fdb.cluster"

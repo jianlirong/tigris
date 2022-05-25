@@ -16,6 +16,7 @@ package muxer
 
 import (
 	"fmt"
+	"github.com/tigrisdata/tigris/store/search"
 	"net"
 
 	"github.com/rs/zerolog/log"
@@ -48,8 +49,8 @@ func NewMuxer(cfg *config.Config) *Muxer {
 	return m
 }
 
-func (m *Muxer) RegisterServices(kvStore kv.KeyValueStore) {
-	services := v1.GetRegisteredServices(kvStore)
+func (m *Muxer) RegisterServices(kvStore kv.KeyValueStore, searchStore search.Store) {
+	services := v1.GetRegisteredServices(kvStore, searchStore)
 	for _, r := range services {
 		for _, s := range m.servers {
 			if s.GetType() == types.GRPCServer {

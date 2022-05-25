@@ -90,6 +90,17 @@ func (a *AndFilter) String() string {
 	return str + "}"
 }
 
+func (a *AndFilter) ToSearchFilter() string {
+	var str string
+	for i, f := range a.filter {
+		str += f.ToSearchFilter()
+		if i < len(a.filter)-1 {
+			str += "&&"
+		}
+	}
+	return str
+}
+
 // OrFilter performs a logical OR operation on an array of two or more expressions. The or filter looks like this,
 // {"$or": [{"f1":1}, {"f2": 3}....]}
 // It can be nested i.e. a top level "$or" can have multiple nested $and/$or
@@ -144,4 +155,15 @@ func (o *OrFilter) String() string {
 		str += fmt.Sprintf("%s", f)
 	}
 	return str + "}"
+}
+
+func (o *OrFilter) ToSearchFilter() string {
+	var str string
+	for i, f := range o.filter {
+		str += f.ToSearchFilter()
+		if i < len(o.filter)-1 {
+			str += ""
+		}
+	}
+	return str
 }

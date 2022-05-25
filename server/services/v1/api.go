@@ -16,6 +16,8 @@ package v1
 
 import (
 	"context"
+	"github.com/tigrisdata/tigris/server/cdc"
+	"github.com/tigrisdata/tigris/store/search"
 	"net/http"
 
 	"github.com/fullstorydev/grpchan/inprocgrpc"
@@ -23,7 +25,6 @@ import (
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/rs/zerolog/log"
 	api "github.com/tigrisdata/tigris/api/server/v1"
-	"github.com/tigrisdata/tigris/cdc"
 	"github.com/tigrisdata/tigris/internal"
 	"github.com/tigrisdata/tigris/server/metadata"
 	middleware "github.com/tigrisdata/tigris/server/midddleware"
@@ -51,6 +52,7 @@ type apiService struct {
 	api.UnimplementedTigrisServer
 
 	kvStore       kv.KeyValueStore
+	searchStore   search.Store
 	txMgr         *transaction.Manager
 	encoder       metadata.Encoder
 	tenantMgr     *metadata.TenantManager
@@ -60,11 +62,12 @@ type apiService struct {
 	versionH      *metadata.VersionHandler
 }
 
-func newApiService(kv kv.KeyValueStore) *apiService {
+func newApiService(kv kv.KeyValueStore, searchStore search.Store) *apiService {
 	u := &apiService{
-		kvStore:  kv,
-		txMgr:    transaction.NewManager(kv),
-		versionH: &metadata.VersionHandler{},
+		kvStore:     kv,
+		searchStore: searchStore,
+		txMgr:       transaction.NewManager(kv),
+		versionH:    &metadata.VersionHandler{},
 	}
 
 	ctx := context.TODO()
@@ -83,8 +86,8 @@ func newApiService(kv kv.KeyValueStore) *apiService {
 	u.tenantMgr = tenantMgr
 	u.encoder = metadata.NewEncoder(tenantMgr)
 	u.cdcMgr = cdc.NewManager()
-	u.sessions = NewSessionManager(u.txMgr, u.tenantMgr, u.versionH)
-	u.runnerFactory = NewQueryRunnerFactory(u.txMgr, u.encoder, u.cdcMgr)
+	u.sessions = NewSessionManager(u.txMgr, u.tenantMgr, u.versionH, u.searchStore, u.encoder, u.cdcMgr)
+	u.runnerFactory = NewQueryRunnerFactory(u.txMgr, u.encoder, u.cdcMgr, u.searchStore)
 	return u
 }
 
@@ -147,7 +150,7 @@ func (s *apiService) CommitTransaction(ctx context.Context, r *api.CommitTransac
 	}
 	defer s.sessions.Remove(session.txCtx.Id)
 
-	err := session.Commit(ctx, s.versionH, session.tx.Context().GetStagedDatabase() != nil, nil)
+	err := session.Commit(s.versionH, session.tx.Context().GetStagedDatabase() != nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +169,7 @@ func (s *apiService) RollbackTransaction(ctx context.Context, r *api.RollbackTra
 	}
 	defer s.sessions.Remove(session.txCtx.Id)
 
-	_ = session.Rollback(ctx)
+	_ = session.Rollback()
 
 	return &api.RollbackTransactionResponse{}, nil
 }
@@ -267,7 +270,7 @@ func (s *apiService) Read(r *api.ReadRequest, stream api.Tigris_ReadServer) erro
 
 	_, err := s.sessions.Execute(stream.Context(), &ReqOptions{
 		txCtx:       api.GetTransaction(r),
-		queryRunner: s.runnerFactory.GetStreamingQueryRunner(r, stream),
+		queryRunner: s.runnerFactory.GetStreamingQueryRunner(r, stream, s.searchStore),
 	})
 	if err != nil {
 		return err

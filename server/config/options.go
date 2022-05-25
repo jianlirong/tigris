@@ -31,6 +31,7 @@ type Config struct {
 	Auth         AuthConfig `yaml:"auth" json:"auth"`
 	FoundationDB FoundationDBConfig
 	Cdc          CdcConfig
+	Search       SearchConfig
 }
 
 type AuthConfig struct {
@@ -67,9 +68,19 @@ var DefaultConfig = Config{
 		StreamBatch:    100,
 		StreamBuffer:   200,
 	},
+	Search: SearchConfig{
+		Host: "0.0.0.0",
+		Port: 8108,
+	},
 }
 
 // FoundationDBConfig keeps FoundationDB configuration parameters
 type FoundationDBConfig struct {
 	ClusterFile string `mapstructure:"cluster_file" json:"cluster_file" yaml:"cluster_file"`
+}
+
+type SearchConfig struct {
+	Host    string
+	Port    int16
+	AuthKey string
 }

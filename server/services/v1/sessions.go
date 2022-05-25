@@ -16,6 +16,8 @@ package v1
 
 import (
 	"context"
+	"fmt"
+	"github.com/tigrisdata/tigris/server/cdc"
 	"math/rand"
 	"sync"
 	"time"
@@ -26,6 +28,7 @@ import (
 	middleware "github.com/tigrisdata/tigris/server/midddleware"
 	"github.com/tigrisdata/tigris/server/transaction"
 	"github.com/tigrisdata/tigris/store/kv"
+	"github.com/tigrisdata/tigris/store/search"
 	ulog "github.com/tigrisdata/tigris/util/log"
 )
 
@@ -36,18 +39,28 @@ import (
 type SessionManager struct {
 	sync.RWMutex
 
-	txMgr     *transaction.Manager
-	tenantMgr *metadata.TenantManager
-	versionH  *metadata.VersionHandler
-	tracker   *sessionTracker
+	txMgr       *transaction.Manager
+	tenantMgr   *metadata.TenantManager
+	versionH    *metadata.VersionHandler
+	tracker     *sessionTracker
+	searchStore search.Store
+	encoder     metadata.Encoder
+	txListeners []TxListener
 }
 
-func NewSessionManager(txMgr *transaction.Manager, tenantMgr *metadata.TenantManager, versionH *metadata.VersionHandler) *SessionManager {
+func NewSessionManager(txMgr *transaction.Manager, tenantMgr *metadata.TenantManager, versionH *metadata.VersionHandler, searchStore search.Store, encoder metadata.Encoder, cdc *cdc.Manager) *SessionManager {
+	var txListeners []TxListener
+	txListeners = append(txListeners, cdc)
+	txListeners = append(txListeners, NewSearchIndexer(searchStore, encoder))
+
 	return &SessionManager{
-		txMgr:     txMgr,
-		tenantMgr: tenantMgr,
-		versionH:  versionH,
-		tracker:   newSessionTracker(),
+		txMgr:       txMgr,
+		tenantMgr:   tenantMgr,
+		versionH:    versionH,
+		tracker:     newSessionTracker(),
+		searchStore: searchStore,
+		encoder:     encoder,
+		txListeners: txListeners,
 	}
 }
 
@@ -86,22 +99,22 @@ func (sessMgr *SessionManager) Create(ctx context.Context, reloadVerOutside bool
 		}
 	}
 
+	sessCtx, cancel := context.WithCancel(ctx)
+	sessCtx = kv.WrapEventListenerCtx(ctx)
 	q := &QuerySession{
-		tx:      tx,
-		txCtx:   txCtx,
-		tenant:  tenant,
-		version: version,
+		tx:          tx,
+		ctx:         sessCtx,
+		cancel:      cancel,
+		txCtx:       txCtx,
+		tenant:      tenant,
+		version:     version,
+		txListeners: sessMgr.txListeners,
 	}
 	if track {
 		sessMgr.tracker.add(txCtx.Id, q)
 	}
 
-	return &QuerySession{
-		tx:      tx,
-		txCtx:   txCtx,
-		tenant:  tenant,
-		version: version,
-	}, nil
+	return q, nil
 }
 
 func (sessMgr *SessionManager) Get(id string) *QuerySession {
@@ -113,13 +126,13 @@ func (sessMgr *SessionManager) Remove(id string) {
 }
 
 // Execute is responsible to execute a query. In a way this method is managing the lifecycle of a query. For implicit
-// transaction everything is done in this method. For explicit transaction, a session may already exist so it only
+// transaction everything is done in this method. For explicit transaction, a session may already exist, so it only
 // needs to run without calling Commit/Rollback.
 func (sessMgr *SessionManager) Execute(ctx context.Context, req *ReqOptions) (*Response, error) {
 	if req.txCtx != nil {
 		id := req.txCtx.Id
 		session := sessMgr.tracker.get(id)
-		resp, ctx, err := session.Run(ctx, req.queryRunner)
+		resp, ctx, err := session.Run(req.queryRunner)
 		session.ctx = ctx
 		return resp, err
 	} else {
@@ -142,18 +155,20 @@ func (sessMgr *SessionManager) executeWithRetry(ctx context.Context, req *ReqOpt
 			return nil, err
 		}
 
-		if resp, ctx, err = session.Run(ctx, req.queryRunner); err != nil {
-			_ = session.Rollback(ctx)
+		// use the same ctx assigned in the session
+		if resp, session.ctx, err = session.Run(req.queryRunner); err != nil {
+			_ = session.Rollback()
 		} else {
-			err = session.Commit(ctx, sessMgr.versionH, req.metadataChange, err)
+			err = session.Commit(sessMgr.versionH, req.metadataChange, err)
 		}
 
-		if err != kv.ErrConflictingTransaction {
+		if err != kv.ErrConflictingTransaction || search.IsSearchError(err) {
 			return
 		}
 
 		select {
 		case <-ctx.Done():
+			session.cancel()
 			return
 		default:
 			d, ok := ctx.Deadline()
@@ -173,38 +188,59 @@ func (sessMgr *SessionManager) executeWithRetry(ctx context.Context, req *ReqOpt
 }
 
 type QuerySession struct {
-	tx      transaction.Tx
-	ctx     context.Context
-	txCtx   *api.TransactionCtx
-	tenant  *metadata.Tenant
-	version metadata.Version
+	tx          transaction.Tx
+	ctx         context.Context
+	cancel      context.CancelFunc
+	txCtx       *api.TransactionCtx
+	tenant      *metadata.Tenant
+	version     metadata.Version
+	txListeners []TxListener
 }
 
-func (s *QuerySession) Run(ctx context.Context, runner QueryRunner) (*Response, context.Context, error) {
-	resp, ctx, err := runner.Run(ctx, s.tx, s.tenant)
+func (s *QuerySession) Run(runner QueryRunner) (*Response, context.Context, error) {
+	resp, ctx, err := runner.Run(s.ctx, s.tx, s.tenant)
 	return resp, ctx, err
 }
 
-func (s *QuerySession) Rollback(ctx context.Context) error {
-	return s.tx.Rollback(ctx)
+func (s *QuerySession) Rollback() error {
+	defer s.cancel()
+
+	for _, listener := range s.txListeners {
+		listener.OnRollback(s.ctx, kv.GetEventListener(s.ctx))
+	}
+	return s.tx.Rollback(s.ctx)
 }
 
-func (s *QuerySession) Commit(ctx context.Context, versionMgr *metadata.VersionHandler, incVersion bool, err error) error {
+func (s *QuerySession) Commit(versionMgr *metadata.VersionHandler, incVersion bool, err error) error {
+	defer s.cancel()
+
 	if err != nil {
-		_ = s.tx.Rollback(ctx)
+		_ = s.tx.Rollback(s.ctx)
 		return err
 	}
 
 	if incVersion {
 		// metadata change will bump up the metadata version, we are doing it in a different transaction
 		// because it is not allowed to read and write the version in the same transaction
-		if err = versionMgr.Increment(ctx, s.tx); ulog.E(err) {
-			_ = s.tx.Rollback(ctx)
+		if err = versionMgr.Increment(s.ctx, s.tx); ulog.E(err) {
+			_ = s.tx.Rollback(s.ctx)
 			return err
 		}
 	}
 
-	return s.tx.Commit(ctx)
+	for _, listener := range s.txListeners {
+		listener.OnCommit(s.ctx, s.tx, kv.GetEventListener(s.ctx))
+	}
+	fmt.Println("Just before commit")
+	if err = s.tx.Commit(s.ctx); err == nil {
+		// try indexing search documents
+		fmt.Println("Calling PostCommit on ", s.txListeners)
+		for _, listener := range s.txListeners {
+			listener.OnPostCommit(s.ctx, kv.GetEventListener(s.ctx))
+		}
+	}
+
+	return err
 }
 
 // sessionTracker is used to track sessions

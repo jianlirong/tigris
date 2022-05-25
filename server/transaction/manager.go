@@ -52,6 +52,7 @@ type Tx interface {
 	Commit(ctx context.Context) error
 	Rollback(ctx context.Context) error
 	SetVersionstampedValue(ctx context.Context, key []byte, value []byte) error
+	SetVersionstampedKey(ctx context.Context, key []byte, value []byte) error
 }
 
 type StagedDB interface {
@@ -246,6 +247,17 @@ func (s *TxSession) SetVersionstampedValue(ctx context.Context, key []byte, valu
 	}
 
 	return s.kTx.SetVersionstampedValue(ctx, key, value)
+}
+
+func (s *TxSession) SetVersionstampedKey(ctx context.Context, key []byte, value []byte) error {
+	s.Lock()
+	defer s.Unlock()
+
+	if err := s.validateSession(); err != nil {
+		return nil
+	}
+
+	return s.kTx.SetVersionstampedKey(ctx, key, value)
 }
 
 func (s *TxSession) Get(ctx context.Context, key []byte) ([]byte, error) {

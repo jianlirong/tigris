@@ -25,6 +25,7 @@ import (
 	jsoniter "github.com/json-iterator/go"
 	"github.com/santhosh-tekuri/jsonschema/v5"
 	api "github.com/tigrisdata/tigris/api/server/v1"
+	tsApi "github.com/typesense/typesense-go/typesense/api"
 )
 
 const (
@@ -69,6 +70,8 @@ type DefaultCollection struct {
 	Validator *jsonschema.Schema
 	// JSON schema
 	Schema jsoniter.RawMessage
+
+	SearchSchema *tsApi.CollectionSchema
 }
 
 func NewDefaultCollection(cname string, id uint32, fields []*Field, indexes *Indexes, schema jsoniter.RawMessage) *DefaultCollection {
@@ -87,13 +90,15 @@ func NewDefaultCollection(cname string, id uint32, fields []*Field, indexes *Ind
 	// flag. Later probably we can relax it. Starting with strict validation is better than not validating extra keys.
 	validator.AdditionalProperties = false
 
+	search := buildSearchSchema(cname, fields)
 	return &DefaultCollection{
-		Id:        id,
-		Name:      cname,
-		Fields:    fields,
-		Indexes:   indexes,
-		Validator: validator,
-		Schema:    schema,
+		Id:           id,
+		Name:         cname,
+		Fields:       fields,
+		Indexes:      indexes,
+		Validator:    validator,
+		Schema:       schema,
+		SearchSchema: search,
 	}
 }
 
@@ -111,6 +116,10 @@ func (d *DefaultCollection) GetFields() []*Field {
 
 func (d *DefaultCollection) GetIndexes() *Indexes {
 	return d.Indexes
+}
+
+func (d *DefaultCollection) GetSearchSchema() *tsApi.CollectionSchema {
+	return d.SearchSchema
 }
 
 // Validate expects an unmarshalled document which it will validate again the schema of this collection.
@@ -131,6 +140,53 @@ func (d *DefaultCollection) Validate(document interface{}) error {
 	}
 
 	return api.Errorf(api.Code_INVALID_ARGUMENT, err.Error())
+}
+
+func buildSearchSchema(name string, fields []*Field) *tsApi.CollectionSchema {
+	var searchFields []tsApi.Field
+	/**searchFields = append(searchFields, tsApi.Field{
+		Name: "id",
+		Type: FieldNames[StringType],
+	})*/
+
+	var ptrTrue = true
+	for _, f := range fields {
+		var tsField tsApi.Field
+		switch f.DataType {
+		case StringType:
+			tsField = tsApi.Field{
+				Name:     f.FieldName,
+				Facet:    &ptrTrue,
+				Type:     FieldNames[StringType],
+				Optional: &ptrTrue,
+			}
+		case ByteType, UUIDType, DateTimeType:
+			tsField = tsApi.Field{
+				Name:     f.FieldName,
+				Type:     FieldNames[StringType],
+				Optional: &ptrTrue,
+			}
+		case Int32Type, Int64Type, DoubleType:
+			tsField = tsApi.Field{
+				Name:     f.FieldName,
+				Type:     FieldNames[f.DataType],
+				Facet:    &ptrTrue,
+				Optional: &ptrTrue,
+			}
+		default:
+			tsField = tsApi.Field{
+				Name:     f.FieldName,
+				Type:     FieldNames[f.DataType],
+				Optional: &ptrTrue,
+			}
+		}
+		searchFields = append(searchFields, tsField)
+	}
+
+	return &tsApi.CollectionSchema{
+		Name:   name,
+		Fields: searchFields,
+	}
 }
 
 func init() {

@@ -18,22 +18,21 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-
 	"github.com/buger/jsonparser"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/pkg/errors"
-	"github.com/rs/zerolog/log"
 	api "github.com/tigrisdata/tigris/api/server/v1"
-	"github.com/tigrisdata/tigris/cdc"
 	"github.com/tigrisdata/tigris/internal"
 	"github.com/tigrisdata/tigris/keys"
 	"github.com/tigrisdata/tigris/query/filter"
 	"github.com/tigrisdata/tigris/query/read"
 	"github.com/tigrisdata/tigris/query/update"
 	"github.com/tigrisdata/tigris/schema"
+	"github.com/tigrisdata/tigris/server/cdc"
 	"github.com/tigrisdata/tigris/server/metadata"
 	"github.com/tigrisdata/tigris/server/transaction"
 	"github.com/tigrisdata/tigris/store/kv"
+	"github.com/tigrisdata/tigris/store/search"
 	ulog "github.com/tigrisdata/tigris/util/log"
 	"github.com/tigrisdata/tigris/value"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -46,17 +45,19 @@ type QueryRunner interface {
 
 // QueryRunnerFactory is responsible for creating query runners for different queries
 type QueryRunnerFactory struct {
-	txMgr   *transaction.Manager
-	encoder metadata.Encoder
-	cdcMgr  *cdc.Manager
+	txMgr       *transaction.Manager
+	encoder     metadata.Encoder
+	cdcMgr      *cdc.Manager
+	searchStore search.Store
 }
 
 // NewQueryRunnerFactory returns QueryRunnerFactory object
-func NewQueryRunnerFactory(txMgr *transaction.Manager, encoder metadata.Encoder, cdcMgr *cdc.Manager) *QueryRunnerFactory {
+func NewQueryRunnerFactory(txMgr *transaction.Manager, encoder metadata.Encoder, cdcMgr *cdc.Manager, searchStore search.Store) *QueryRunnerFactory {
 	return &QueryRunnerFactory{
-		txMgr:   txMgr,
-		encoder: encoder,
-		cdcMgr:  cdcMgr,
+		txMgr:       txMgr,
+		encoder:     encoder,
+		cdcMgr:      cdcMgr,
+		searchStore: searchStore,
 	}
 }
 
@@ -89,17 +90,19 @@ func (f *QueryRunnerFactory) GetDeleteQueryRunner(r *api.DeleteRequest) *DeleteQ
 }
 
 // GetStreamingQueryRunner returns StreamingQueryRunner
-func (f *QueryRunnerFactory) GetStreamingQueryRunner(r *api.ReadRequest, streaming Streaming) *StreamingQueryRunner {
+func (f *QueryRunnerFactory) GetStreamingQueryRunner(r *api.ReadRequest, streaming Streaming, search search.Store) *StreamingQueryRunner {
 	return &StreamingQueryRunner{
 		BaseQueryRunner: NewBaseQueryRunner(f.encoder, f.cdcMgr, f.txMgr),
 		req:             r,
 		streaming:       streaming,
+		search:          search,
 	}
 }
 
 func (f *QueryRunnerFactory) GetCollectionQueryRunner() *CollectionQueryRunner {
 	return &CollectionQueryRunner{
 		BaseQueryRunner: NewBaseQueryRunner(f.encoder, f.cdcMgr, f.txMgr),
+		searchStore:     f.searchStore,
 	}
 }
 
@@ -486,6 +489,7 @@ type StreamingQueryRunner struct {
 
 	req       *api.ReadRequest
 	streaming Streaming
+	search    search.Store
 }
 
 // Run is responsible for running/executing the query
@@ -507,70 +511,47 @@ func (runner *StreamingQueryRunner) Run(ctx context.Context, tx transaction.Tx, 
 		return nil, ctx, err
 	}
 
+	var rowReader RowReader
 	if filter.IsFullCollectionScan(runner.req.GetFilter()) {
 		table, err := runner.encoder.EncodeTableName(tenant.GetNamespace(), db, collection)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		resp, err := runner.iterateCollection(ctx, tx, table, fieldFactory)
+		rowReader, err = MakeDatabaseRowReader(ctx, tx, []keys.Key{keys.NewKey(table)})
+	} else {
+		filterFactory := filter.NewFactory(collection.Fields)
+		filters, err := filterFactory.Build(runner.req.Filter)
 		if err != nil {
-			log.Debug().Str("db", db.Name()).Str("coll", collection.Name).Bytes("encoding", table).Err(err).Msg("full scan")
+			return nil, ctx, err
 		}
 
-		return resp, ctx, err
+		// or this is a read request that needs to be streamed after filtering the keys.
+		var iKeys []keys.Key
+		if iKeys, err = runner.buildKeysUsingFilter(tenant, db, collection, runner.req.Filter); err == nil {
+			rowReader, err = MakeDatabaseRowReader(ctx, tx, iKeys)
+		} else {
+			table := runner.encoder.EncodeSearchTableName(tenant.GetNamespace().Name(), db.Name(), collection.Name)
+			rowReader, err = MakeSearchRowReader(ctx, table, nil, filters, runner.search)
+		}
 	}
 
-	// or this is a read request that needs to be streamed after filtering the keys.
-	iKeys, err := runner.buildKeysUsingFilter(tenant, db, collection, runner.req.Filter)
-	if err != nil {
+	if err = runner.iterate(rowReader, fieldFactory); err != nil {
 		return nil, ctx, err
 	}
 
-	resp, err := runner.iterateKeys(ctx, tx, iKeys, fieldFactory)
-	if err != nil {
-		log.Debug().Str("db", db.Name()).Str("coll", collection.Name).Err(err).Msg("iterate keys")
-	}
-	return resp, ctx, err
+	return &Response{}, ctx, nil
 }
 
-// iterateCollection is used to scan the entire collection.
-func (runner *StreamingQueryRunner) iterateCollection(ctx context.Context, tx transaction.Tx, table []byte, fieldFactory *read.FieldFactory) (*Response, error) {
-	var totalResults int64 = 0
-	if err := runner.iterate(ctx, tx, keys.NewKey(table), fieldFactory, &totalResults); err != nil {
-		return nil, err
-	}
-
-	return &Response{}, nil
-}
-
-// iterateKeys is responsible for building keys from the filter and then executing the query. A key could be a primary
-// key or an index key.
-func (runner *StreamingQueryRunner) iterateKeys(ctx context.Context, tx transaction.Tx, iKeys []keys.Key, fieldFactory *read.FieldFactory) (*Response, error) {
-	var totalResults int64 = 0
-	for _, key := range iKeys {
-		if err := runner.iterate(ctx, tx, key, fieldFactory, &totalResults); err != nil {
-			return nil, err
-		}
-	}
-
-	return &Response{}, nil
-}
-
-func (runner *StreamingQueryRunner) iterate(ctx context.Context, tx transaction.Tx, key keys.Key, fieldFactory *read.FieldFactory, totalResults *int64) error {
-	it, err := tx.Read(ctx, key)
-	if ulog.E(err) {
-		return err
-	}
-
-	var limit int64 = 0
+func (runner *StreamingQueryRunner) iterate(reader RowReader, fieldFactory *read.FieldFactory) error {
+	limit, totalResults := int64(0), int64(0)
 	if runner.req.GetOptions() != nil {
 		limit = runner.req.GetOptions().Limit
 	}
 
-	var row kv.KeyValue
-	for it.Next(&row) {
-		if limit > 0 && limit <= *totalResults {
+	var row Row
+	for reader.NextRow(&row) {
+		if limit > 0 && limit <= totalResults {
 			return nil
 		}
 
@@ -592,15 +573,15 @@ func (runner *StreamingQueryRunner) iterate(ctx context.Context, tx transaction.
 				CreatedAt: createdAt,
 				UpdatedAt: updatedAt,
 			},
-			ResumeToken: row.FDBKey,
+			ResumeToken: row.Key,
 		}); ulog.E(err) {
 			return err
 		}
 
-		*totalResults++
+		totalResults++
 	}
 
-	return it.Err()
+	return reader.Err()
 }
 
 type CollectionQueryRunner struct {
@@ -610,6 +591,7 @@ type CollectionQueryRunner struct {
 	listReq           *api.ListCollectionsRequest
 	createOrUpdateReq *api.CreateOrUpdateCollectionRequest
 	describeReq       *api.DescribeCollectionRequest
+	searchStore       search.Store
 }
 
 func (runner *CollectionQueryRunner) SetCreateOrUpdateCollectionReq(create *api.CreateOrUpdateCollectionRequest) {
@@ -645,6 +627,13 @@ func (runner *CollectionQueryRunner) Run(ctx context.Context, tx transaction.Tx,
 			return nil, ctx, err
 		}
 
+		runner.encoder.EncodeSearchTableName(tenant.GetNamespace().Name(), db.Name(), runner.dropReq.GetCollection())
+		if err = runner.searchStore.DropCollection(ctx, runner.encoder.EncodeSearchTableName(tenant.GetNamespace().Name(), db.Name(), runner.dropReq.GetCollection())); err != nil {
+			if err != search.ErrNotFound {
+				return nil, ctx, err
+			}
+		}
+
 		return &Response{
 			status: DroppedStatus,
 		}, ctx, nil
@@ -654,12 +643,13 @@ func (runner *CollectionQueryRunner) Run(ctx context.Context, tx transaction.Tx,
 			return nil, ctx, err
 		}
 
-		if db.GetCollection(runner.createOrUpdateReq.GetCollection()) != nil && runner.createOrUpdateReq.OnlyCreate {
+		collectionName := runner.createOrUpdateReq.GetCollection()
+		if db.GetCollection(collectionName) != nil && runner.createOrUpdateReq.OnlyCreate {
 			// check if onlyCreate is set and if yes then return an error if collection already exist
 			return nil, ctx, api.Errorf(api.Code_ALREADY_EXISTS, "collection already exist")
 		}
 
-		schFactory, err := schema.Build(runner.createOrUpdateReq.GetCollection(), runner.createOrUpdateReq.GetSchema())
+		schFactory, err := schema.Build(collectionName, runner.createOrUpdateReq.GetSchema())
 		if err != nil {
 			return nil, ctx, err
 		}
@@ -676,6 +666,14 @@ func (runner *CollectionQueryRunner) Run(ctx context.Context, tx transaction.Tx,
 				return nil, ctx, api.Errorf(api.Code_ABORTED, "concurrent create collection request, aborting")
 			}
 			return nil, ctx, err
+		}
+
+		collection := db.GetCollection(collectionName)
+		collection.SearchSchema.Name = runner.encoder.EncodeSearchTableName(tenant.GetNamespace().Name(), db.Name(), collection.Name)
+		if err = runner.searchStore.CreateCollection(ctx, collection.SearchSchema); err != nil {
+			if err != search.ErrDuplicateEntity {
+				return nil, ctx, err
+			}
 		}
 
 		return &Response{

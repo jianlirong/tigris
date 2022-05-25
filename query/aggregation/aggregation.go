@@ -42,6 +42,7 @@ import (
 // { "$sum": [ "$final", "$midterm" ] }}
 type Aggregation interface {
 	Apply(document jsoniter.RawMessage)
+	ToSearch() string
 }
 
 // Unmarshal to unmarshal an aggregation object
@@ -66,7 +67,7 @@ func UnmarshalAggObject(input jsoniter.RawMessage) (expression.Expr, error) {
 				return nil, err
 			}
 			return f.Get(), nil
-		case avg, min, max, sum:
+		case avg, min, max, sum, count:
 			var f AccumulatorFactory
 			if err = jsoniter.Unmarshal(input, &f); err != nil {
 				return nil, err
