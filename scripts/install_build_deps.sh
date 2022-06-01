@@ -26,10 +26,10 @@ go install github.com/mikefarah/yq/v4@latest # used to fix OpenAPI spec in scrip
 
 FDB_VERSION=6.3.23
 if [[ "$OSTYPE" == "darwin"* ]]; then
-  FDB_PACKAGE_PATH="$(mktemp -p /tmp/ -u)-FoundationDB-$FDB_VERSION.pkg"
+  FDB_PACKAGE_PATH="$(mktemp -t tmp -d)-FoundationDB-$FDB_VERSION.pkg"
 	FDB_SHA512=d7b89e82dae332af09637543371c58bcaaab2c818a3ea49f56e22587d1a6adfc255e154e6c4feca90f407e37d63d8a3cd2e7cfa0b996c2865c9d74fd5dc1b0ba
 	wget https://github.com/apple/foundationdb/releases/download/$FDB_VERSION/FoundationDB-$FDB_VERSION.pkg -O "$FDB_PACKAGE_PATH"
-	echo "$FDB_SHA512 $FDB_PACKAGE_PATH" | sha512sum -c
+	echo "$FDB_SHA512  $FDB_PACKAGE_PATH" | shasum -a 512 -c
 	sudo installer -pkg "$FDB_PACKAGE_PATH" -target /
 
 	if command -v brew > /dev/null 2>&1; then
