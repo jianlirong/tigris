@@ -1,7 +1,6 @@
 package search
 
 import (
-	"fmt"
 	"github.com/stretchr/testify/require"
 	"github.com/tigrisdata/tigris/query/filter"
 	"github.com/tigrisdata/tigris/schema"
@@ -16,10 +15,7 @@ func TestSearchBuilder(t *testing.T) {
 		{FieldName: "int_value", DataType: schema.Int64Type},
 		{FieldName: "string_value1", DataType: schema.StringType},
 	})
-	filters, err := f.Build(js)
+	filters, err := f.Factorize(js)
 	require.NoError(t, err)
 	require.Len(t, filters, 2)
-
-	s := Builder{}
-	fmt.Println(s.BuildUsingFilters(filters))
 }

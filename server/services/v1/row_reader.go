@@ -3,78 +3,21 @@ package v1
 import (
 	"context"
 	"encoding/json"
-	"github.com/tigrisdata/tigris/internal"
-	qsearch "github.com/tigrisdata/tigris/query/search"
-	"github.com/tigrisdata/tigris/store/search"
-	tsApi "github.com/typesense/typesense-go/typesense/api"
 
+	"github.com/tigrisdata/tigris/internal"
 	"github.com/tigrisdata/tigris/keys"
 	"github.com/tigrisdata/tigris/query/filter"
 	"github.com/tigrisdata/tigris/query/read"
+	qsearch "github.com/tigrisdata/tigris/query/search"
 	"github.com/tigrisdata/tigris/server/transaction"
 	"github.com/tigrisdata/tigris/store/kv"
+	"github.com/tigrisdata/tigris/store/search"
 	ulog "github.com/tigrisdata/tigris/util/log"
 )
-
-/**
-
-RowReader(filter)
-	-> GetKeysOnly(filter)
-	-> ReadDocuments(filter)
-
-	-> Parse Filter
-	-> 		if able to Build Key
-				-> Return keys
-	-> 		else
-				-> Create SearchReader
-				-> Read documents using the supplied filter
-				-> Create keys
-				-> Returns keys
-
-1. Update
-	- Build Key
-		- If successful directly read from FDB (read and update)
-	- Else
-		- r := SearchRowReader{}
-		- key := r.NextKey()
-		- Read from Search Engine
-		- Create Key from Payload
-		- Perform KV operation in FDB (read and update)
-
-	Update API
-		- Filter
-
-2. Delete
-	- Build Key
-		- If successful directly delete in FDB
-	- Else
-		- r := SearchRowReader{searchEngine[SearchRow]}
-		- key := r.NextKey()
-		- Read from Search Engine
-		- Create Key from Payload
-		- delete in FDB
-
-3. Read
-	- Build Key
-		- If successful directly read from FDB
-		- r := DatabaseRowReader{DatabaseEngine[DatabaseRow]}
-	- Else
-		- Read from Search Engine
-		- r := RowReader{DatabaseEngine[DatabaseRow]}
-
-4. Search
-		- r := RowReader{searchEngine[SearchRow]}
-		- key := r.NextRow()
-*/
 
 type Row struct {
 	Key  []byte
 	Data *internal.TableData
-}
-
-type SearchResult struct {
-	Hits        *[]tsApi.SearchResultHit
-	FacetCounts *[]tsApi.FacetCounts
 }
 
 type RowReader interface {
@@ -85,27 +28,26 @@ type RowReader interface {
 type SearchRowReader struct {
 	idx    int
 	err    error
-	result *SearchResult
+	result *SearchResponse
 }
 
 func MakeSearchRowReader(ctx context.Context, table string, _ []read.Field, filters []filter.Filter, store search.Store) (*SearchRowReader, error) {
-	searchReqBuilder := qsearch.Builder{}
-	searchFilter := searchReqBuilder.BuildUsingFilters(filters)
+	builder := qsearch.NewBuilder()
+	searchFilter := builder.FromFilter(filters)
 
 	result, err := store.Search(ctx, table, searchFilter)
 	if err != nil {
 		return nil, err
 	}
 
-	var hits []tsApi.SearchResultHit
+	var hitsResp = NewHitsResponse()
 	for _, r := range result {
-		if r.Hits != nil {
-			hits = append(hits, *r.Hits...)
-		}
+		hitsResp.Append(r.Hits)
 	}
-	var s = &SearchResult{
-		Hits:        &hits,
-		FacetCounts: result[0].FacetCounts,
+
+	var s = &SearchResponse{
+		Hits:   hitsResp,
+		Facets: CreateFacetResponse(result[0].FacetCounts),
 	}
 
 	return &SearchRowReader{
@@ -119,8 +61,12 @@ func MakeSearchRowReaderUsingFilter(ctx context.Context, table string, filters [
 }
 
 func (s *SearchRowReader) NextRow(row *Row) bool {
-	for s.idx < len(*s.result.Hits) {
-		document := (*s.result.Hits)[s.idx].Document
+	for {
+		document, more := s.result.Hits.GetDocument(s.idx)
+		if !more {
+			break
+		}
+
 		if document == nil {
 			s.idx++
 			continue
@@ -131,24 +77,20 @@ func (s *SearchRowReader) NextRow(row *Row) bool {
 			s.err = err
 			return false
 		}
-		row.Key = []byte((*document)["id"].(string))
+		row.Key = []byte((*document)[searchID].(string))
 		row.Data = &internal.TableData{
 			RawData: data,
 		}
 		break
 	}
-	hasNext := s.idx < len(*s.result.Hits)
+	hasNext := s.result.Hits.HasMoreHits(s.idx)
 	s.idx++
 
 	return hasNext
 }
 
-func (s *SearchRowReader) GetFacet() []tsApi.FacetCounts {
-	if s.result.FacetCounts != nil {
-		return *s.result.FacetCounts
-	}
-
-	return nil
+func (s *SearchRowReader) GetFacet() *FacetResponse {
+	return s.result.Facets
 }
 
 func (s *SearchRowReader) Err() error {

@@ -69,8 +69,10 @@ var DefaultConfig = Config{
 		StreamBuffer:   200,
 	},
 	Search: SearchConfig{
-		Host: "0.0.0.0",
-		Port: 8108,
+		Host:         "0.0.0.0",
+		Port:         8108,
+		ReadEnabled:  true,
+		WriteEnabled: true,
 	},
 }
 
@@ -80,7 +82,9 @@ type FoundationDBConfig struct {
 }
 
 type SearchConfig struct {
-	Host    string
-	Port    int16
-	AuthKey string
+	Host         string
+	Port         int16
+	AuthKey      string
+	ReadEnabled  bool
+	WriteEnabled bool
 }

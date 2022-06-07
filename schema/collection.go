@@ -74,7 +74,7 @@ type DefaultCollection struct {
 	SearchSchema *tsApi.CollectionSchema
 }
 
-func NewDefaultCollection(cname string, id uint32, fields []*Field, indexes *Indexes, schema jsoniter.RawMessage) *DefaultCollection {
+func NewDefaultCollection(cname string, id uint32, fields []*Field, indexes *Indexes, schema jsoniter.RawMessage, searchCollectionName string) *DefaultCollection {
 	url := cname + ".json"
 	compiler := jsonschema.NewCompiler()
 	compiler.Draft = jsonschema.Draft7 // Format is only working for draft7
@@ -90,7 +90,7 @@ func NewDefaultCollection(cname string, id uint32, fields []*Field, indexes *Ind
 	// flag. Later probably we can relax it. Starting with strict validation is better than not validating extra keys.
 	validator.AdditionalProperties = false
 
-	search := buildSearchSchema(cname, fields)
+	search := buildSearchSchema(searchCollectionName, fields)
 	return &DefaultCollection{
 		Id:           id,
 		Name:         cname,
@@ -166,10 +166,17 @@ func buildSearchSchema(name string, fields []*Field) *tsApi.CollectionSchema {
 				Type:     FieldNames[StringType],
 				Optional: &ptrTrue,
 			}
-		case Int32Type, Int64Type, DoubleType:
+		case Int32Type, Int64Type:
 			tsField = tsApi.Field{
 				Name:     f.FieldName,
 				Type:     FieldNames[f.DataType],
+				Facet:    &ptrTrue,
+				Optional: &ptrTrue,
+			}
+		case DoubleType:
+			tsField = tsApi.Field{
+				Name:     f.FieldName,
+				Type:     "float",
 				Facet:    &ptrTrue,
 				Optional: &ptrTrue,
 			}

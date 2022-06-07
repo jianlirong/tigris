@@ -17,22 +17,30 @@ package v1
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/subspace"
 	"github.com/buger/jsonparser"
-	jsoniter "github.com/json-iterator/go"
 	"github.com/tigrisdata/tigris/internal"
 	"github.com/tigrisdata/tigris/schema"
 	"github.com/tigrisdata/tigris/server/metadata"
 	"github.com/tigrisdata/tigris/server/transaction"
 	"github.com/tigrisdata/tigris/store/kv"
 	"github.com/tigrisdata/tigris/store/search"
-	"time"
 )
 
 var (
 	ErrSearchIndexingFailed = fmt.Errorf("failed to index documents")
+)
+
+const (
+	searchID = "id"
+)
+
+const (
+	searchUpsert string = "upsert"
+	searchUpdate string = "update"
 )
 
 type SearchIndexer struct {
@@ -47,20 +55,17 @@ func NewSearchIndexer(searchStore search.Store, encoder metadata.Encoder) *Searc
 	}
 }
 
-func (i *SearchIndexer) OnPostCommit(ctx context.Context, eventListener kv.EventListener) error {
-	events := eventListener.GetEvents()
-	fmt.Println("event s", events)
-	for _, event := range events {
+func (i *SearchIndexer) OnPostCommit(ctx context.Context, tenant *metadata.Tenant, eventListener kv.EventListener) error {
+	for _, event := range eventListener.GetEvents() {
 		var err error
-		ns, db, coll, ok := i.encoder.DecodeTableName(event.Table)
+		_, db, coll, ok := i.encoder.DecodeTableName(event.Table)
 		if !ok {
 			continue
 		}
 
-		searchTableName := i.encoder.EncodeSearchTableName(ns, db, coll)
-		tableData, err := internal.Decode(event.Data)
-		if err != nil {
-			return err
+		collection := tenant.GetCollection(db, coll)
+		if collection == nil {
+			continue
 		}
 
 		searchKey, err := CreateSearchKey(event.Table, event.Key)
@@ -68,50 +73,53 @@ func (i *SearchIndexer) OnPostCommit(ctx context.Context, eventListener kv.Event
 			return err
 		}
 
-		var action string
-		switch event.Op {
-		case kv.InsertEvent, kv.ReplaceEvent:
-			action = "upsert"
-		case kv.UpdateEvent:
-			action = "update"
-		}
+		if event.Op == kv.DeleteEvent {
+			if err = i.searchStore.DeleteDocuments(ctx, collection.SearchSchema.Name, searchKey); err != nil {
+				return err
+			}
+		} else {
+			var action string
+			switch event.Op {
+			case kv.InsertEvent, kv.ReplaceEvent:
+				action = searchUpsert
+			case kv.UpdateEvent:
+				action = searchUpdate
+			}
 
-		tableData.RawData, err = jsonparser.Set(tableData.RawData, searchKey, "id")
-		if err != nil {
-			return err
-		}
+			tableData, err := internal.Decode(event.Data)
+			if err != nil {
+				return err
+			}
 
-		fmt.Println("searchTableName ", searchTableName, event.Op, " searched key", string(searchKey))
-		for attempt := 0; attempt < 5; attempt++ {
-			fmt.Println(string(tableData.RawData))
+			// modify the raw data in place, string needs to be quoted
+			if tableData.RawData, err = jsonparser.Set(tableData.RawData, []byte(fmt.Sprintf(`"%s"`, searchKey)), searchID); err != nil {
+				return err
+			}
+
 			reader := bytes.NewReader(tableData.RawData)
-			err = i.searchStore.IndexDocuments(ctx, searchTableName, reader, search.IndexDocumentsOptions{
+			if err = i.searchStore.IndexDocuments(ctx, collection.SearchSchema.Name, reader, search.IndexDocumentsOptions{
 				Action:    action,
 				BatchSize: 1,
-			})
-
-			if err == nil {
-				break
+			}); err != nil {
+				return err
 			}
-			time.Sleep(10 * time.Millisecond)
-		}
-		if err != nil {
-			return err
 		}
 	}
 
 	return nil
 }
 
-func (i *SearchIndexer) OnCommit(context.Context, transaction.Tx, kv.EventListener) error { return nil }
+func (i *SearchIndexer) OnCommit(context.Context, *metadata.Tenant, transaction.Tx, kv.EventListener) error {
+	return nil
+}
 
-func (i *SearchIndexer) OnRollback(context.Context, kv.EventListener) {}
+func (i *SearchIndexer) OnRollback(context.Context, *metadata.Tenant, kv.EventListener) {}
 
-func CreateSearchKey(table []byte, fdbKey []byte) ([]byte, error) {
+func CreateSearchKey(table []byte, fdbKey []byte) (string, error) {
 	sb := subspace.FromBytes(table)
 	tp, err := sb.Unpack(fdb.Key(fdbKey))
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	// ToDo: add a pkey check here
@@ -121,16 +129,26 @@ func CreateSearchKey(table []byte, fdbKey []byte) ([]byte, error) {
 
 	// the zeroth entry represents index key name
 	tp = tp[1:]
+
 	if len(tp) == 1 {
 		// simply marshal it if it is single primary key
-		switch key := tp[0].(type) {
-		case int32, int64, int:
+		var value string
+		switch tp[0].(type) {
+		case int:
 			// we need to convert numeric to string
-			return []byte(fmt.Sprintf(`"%d"`, key)), nil
+			value = fmt.Sprintf("%d", tp[0].(int))
+		case int32:
+			value = fmt.Sprintf("%d", tp[0].(int32))
+		case int64:
+			value = fmt.Sprintf("%d", tp[0].(int64))
+		case string:
+			value = tp[0].(string)
+		case []byte:
+			value = string(tp[0].([]byte))
 		}
-		return jsoniter.Marshal(tp[0])
+		return value, nil
 	} else {
-		// for composite there is no easy way, pack it and then marshal it
-		return jsoniter.Marshal(tp.Pack())
+		// for composite there is no easy way, pack it and then base64 encode it
+		return base64.StdEncoding.EncodeToString(tp.Pack()), nil
 	}
 }

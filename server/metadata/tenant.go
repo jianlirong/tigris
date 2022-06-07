@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/tigrisdata/tigris/store/search"
 	"reflect"
 	"sync"
 
@@ -101,6 +102,7 @@ type TenantManager struct {
 	sync.RWMutex
 
 	encoder        *encoding.DictionaryEncoder
+	searchStore    search.Store
 	schemaStore    *encoding.SchemaSubspace
 	tenants        map[string]*Tenant
 	idToTenantMap  map[uint32]string
@@ -109,9 +111,11 @@ type TenantManager struct {
 	mdNameRegistry encoding.MDNameRegistry
 }
 
-func NewTenantManager() *TenantManager {
+func NewTenantManager(searchStore search.Store) *TenantManager {
 	mdNameRegistry := &encoding.DefaultMDNameRegistry{}
-	return newTenantManager(mdNameRegistry)
+	m := newTenantManager(mdNameRegistry)
+	m.searchStore = searchStore
+	return m
 }
 
 func newTenantManager(mdNameRegistry encoding.MDNameRegistry) *TenantManager {
@@ -177,7 +181,7 @@ func (m *TenantManager) createOrGetTenantInternal(ctx context.Context, tx transa
 			return nil, err
 		}
 
-		tenant := NewTenant(namespace, m.encoder, m.schemaStore, m.versionH, currentVersion)
+		tenant := NewTenant(namespace, m.encoder, m.schemaStore, m.versionH, currentVersion, m.searchStore)
 		tenant.Lock()
 		err = tenant.reload(ctx, tx, currentVersion)
 		tenant.Unlock()
@@ -195,7 +199,7 @@ func (m *TenantManager) createOrGetTenantInternal(ctx context.Context, tx transa
 		return nil, err
 	}
 
-	return NewTenant(namespace, m.encoder, m.schemaStore, m.versionH, nil), nil
+	return NewTenant(namespace, m.encoder, m.schemaStore, m.versionH, nil, m.searchStore), nil
 }
 
 // GetTableNameFromId returns tenant name, database name, collection name corresponding to their encoded ids.
@@ -261,7 +265,7 @@ func (m *TenantManager) reload(ctx context.Context, tx transaction.Tx, currentVe
 
 	for namespace, id := range namespaces {
 		if _, ok := m.tenants[namespace]; !ok {
-			m.tenants[namespace] = NewTenant(NewTenantNamespace(namespace, id), m.encoder, m.schemaStore, m.versionH, currentVersion)
+			m.tenants[namespace] = NewTenant(NewTenantNamespace(namespace, id), m.encoder, m.schemaStore, m.versionH, currentVersion, m.searchStore)
 			m.idToTenantMap[id] = namespace
 		}
 	}
@@ -285,6 +289,7 @@ type Tenant struct {
 
 	encoder         *encoding.DictionaryEncoder
 	schemaStore     *encoding.SchemaSubspace
+	searchStore     search.Store
 	databases       map[string]*Database
 	idToDatabaseMap map[uint32]string
 	namespace       Namespace
@@ -292,7 +297,7 @@ type Tenant struct {
 	versionH        *VersionHandler
 }
 
-func NewTenant(namespace Namespace, encoder *encoding.DictionaryEncoder, schemaStore *encoding.SchemaSubspace, versionH *VersionHandler, currentVersion Version) *Tenant {
+func NewTenant(namespace Namespace, encoder *encoding.DictionaryEncoder, schemaStore *encoding.SchemaSubspace, versionH *VersionHandler, currentVersion Version, searchStore search.Store) *Tenant {
 	return &Tenant{
 		namespace:       namespace,
 		encoder:         encoder,
@@ -301,6 +306,7 @@ func NewTenant(namespace Namespace, encoder *encoding.DictionaryEncoder, schemaS
 		idToDatabaseMap: make(map[uint32]string),
 		versionH:        versionH,
 		version:         currentVersion,
+		searchStore:     searchStore,
 	}
 }
 
@@ -465,7 +471,7 @@ func (tenant *Tenant) reloadDatabase(ctx context.Context, tx transaction.Tx, dbN
 			continue
 		}
 
-		collection, err := createCollection(id, coll, schema, idxNameToId)
+		collection, err := createCollection(id, coll, schema, idxNameToId, tenant.getSearchCollName(dbName, coll))
 		if err != nil {
 			database.needFixingCollections[coll] = struct{}{}
 			log.Debug().Err(err).Str("collection", coll).Msg("skipping loading collection")
@@ -524,9 +530,20 @@ func (tenant *Tenant) CreateCollection(ctx context.Context, tx transaction.Tx, d
 
 	// store the collection to the databaseObject, this is actually cloned database object passed by the query runner.
 	// So failure of the transaction won't impact the consistency of the cache
-	collection := schema.NewDefaultCollection(schFactory.CollectionName, collectionId, schFactory.Fields, schFactory.Indexes, schFactory.Schema)
+	collection := schema.NewDefaultCollection(schFactory.CollectionName, collectionId, schFactory.Fields, schFactory.Indexes, schFactory.Schema, tenant.getSearchCollName(database.name, schFactory.CollectionName))
 	database.collections[schFactory.CollectionName] = NewCollectionHolder(collectionId, schFactory.CollectionName, collection, idxNameToId)
+
+	if err := tenant.searchStore.CreateCollection(ctx, collection.SearchSchema); err != nil {
+		if err != search.ErrDuplicateEntity {
+			return err
+		}
+	}
+
 	return nil
+}
+
+func (tenant *Tenant) getSearchCollName(dbName string, collName string) string {
+	return fmt.Sprintf("%s-%s-%s", tenant.namespace.Name(), dbName, collName)
 }
 
 // DropCollection is to drop a collection and its associated indexes. It removes the "created" entry from the encoding
@@ -545,6 +562,17 @@ func (tenant *Tenant) DropCollection(ctx context.Context, tx transaction.Tx, db 
 	delete(db.idToCollectionMap, db.collections[collectionName].id)
 	delete(db.collections, collectionName)
 	return err
+}
+
+func (tenant *Tenant) GetCollection(db string, collection string) *schema.DefaultCollection {
+	tenant.RLock()
+	defer tenant.RUnlock()
+
+	if db := tenant.databases[db]; db != nil {
+		return db.GetCollection(collection)
+	}
+
+	return nil
 }
 
 func (tenant *Tenant) dropCollection(ctx context.Context, tx transaction.Tx, db *Database, collectionName string) error {
@@ -568,6 +596,12 @@ func (tenant *Tenant) dropCollection(ctx context.Context, tx transaction.Tx, db 
 	}
 	if err := tenant.schemaStore.Delete(ctx, tx, tenant.namespace.Id(), db.id, cHolder.id); err != nil {
 		return err
+	}
+
+	if err := tenant.searchStore.DropCollection(ctx, cHolder.collection.SearchSchema.Name); err != nil {
+		if err != search.ErrNotFound {
+			return err
+		}
 	}
 
 	return nil
@@ -686,7 +720,7 @@ func (c *collectionHolder) clone() *collectionHolder {
 	copyC.name = c.name
 
 	var err error
-	copyC.collection, err = createCollection(c.id, c.name, c.collection.Schema, c.idxNameToId)
+	copyC.collection, err = createCollection(c.id, c.name, c.collection.Schema, c.idxNameToId, c.collection.SearchSchema.Name)
 	if err != nil {
 		panic(err)
 	}
@@ -708,7 +742,7 @@ func (c *collectionHolder) get() *schema.DefaultCollection {
 	return c.collection
 }
 
-func createCollection(id uint32, name string, revision []byte, idxNameToId map[string]uint32) (*schema.DefaultCollection, error) {
+func createCollection(id uint32, name string, revision []byte, idxNameToId map[string]uint32, searchCollectionName string) (*schema.DefaultCollection, error) {
 	schFactory, err := schema.Build(name, revision)
 	if err != nil {
 		return nil, err
@@ -723,7 +757,7 @@ func createCollection(id uint32, name string, revision []byte, idxNameToId map[s
 		index.Id = id
 	}
 
-	return schema.NewDefaultCollection(name, id, schFactory.Fields, schFactory.Indexes, revision), nil
+	return schema.NewDefaultCollection(name, id, schFactory.Fields, schFactory.Indexes, revision, searchCollectionName), nil
 }
 
 func IsSchemaEq(s1, s2 []byte) (bool, error) {

@@ -206,7 +206,7 @@ func (s *QuerySession) Rollback() error {
 	defer s.cancel()
 
 	for _, listener := range s.txListeners {
-		listener.OnRollback(s.ctx, kv.GetEventListener(s.ctx))
+		listener.OnRollback(s.ctx, s.tenant, kv.GetEventListener(s.ctx))
 	}
 	return s.tx.Rollback(s.ctx)
 }
@@ -229,14 +229,15 @@ func (s *QuerySession) Commit(versionMgr *metadata.VersionHandler, incVersion bo
 	}
 
 	for _, listener := range s.txListeners {
-		listener.OnCommit(s.ctx, s.tx, kv.GetEventListener(s.ctx))
+		listener.OnCommit(s.ctx, s.tenant, s.tx, kv.GetEventListener(s.ctx))
 	}
 	fmt.Println("Just before commit")
 	if err = s.tx.Commit(s.ctx); err == nil {
 		// try indexing search documents
 		fmt.Println("Calling PostCommit on ", s.txListeners)
 		for _, listener := range s.txListeners {
-			listener.OnPostCommit(s.ctx, kv.GetEventListener(s.ctx))
+			err = listener.OnPostCommit(s.ctx, s.tenant, kv.GetEventListener(s.ctx))
+			fmt.Println("post commit err ", err)
 		}
 	}
 

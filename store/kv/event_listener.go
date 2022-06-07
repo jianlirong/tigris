@@ -16,7 +16,6 @@ package kv
 
 import (
 	"context"
-	"fmt"
 )
 
 const (
@@ -62,6 +61,7 @@ func (l *DefaultListener) OnClearRange(op string, table []byte, lKey []byte, rKe
 	l.Events = append(l.Events, &Event{
 		Op:    op,
 		Table: table,
+		Key:   lKey,
 		LKey:  lKey,
 		RKey:  rKey,
 	})
@@ -82,7 +82,6 @@ func WrapEventListenerCtx(ctx context.Context) context.Context {
 
 func GetEventListener(ctx context.Context) EventListener {
 	a := ctx.Value(EventListenerCtxKey{})
-	fmt.Printf("GetEventListener %T%v\n", a, a)
 	if a != nil {
 		if conv, ok := a.(EventListener); ok {
 			return conv

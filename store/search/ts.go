@@ -37,13 +37,17 @@ type IndexDocumentsOptions struct {
 	BatchSize int
 }
 
+func (s *storeImpl) DeleteDocuments(_ context.Context, table string, key string) error {
+	_, err := s.client.Collection(table).Document(key).Delete()
+	return err
+}
+
 func (s *storeImpl) IndexDocuments(_ context.Context, table string, documents io.Reader, options IndexDocumentsOptions) (err error) {
 	var closer io.ReadCloser
 	closer, err = s.client.Collection(table).Documents().ImportJsonl(documents, &tsApi.ImportDocumentsParams{
 		Action:    &options.Action,
 		BatchSize: &options.BatchSize,
 	})
-	fmt.Println("index docs error ", err)
 	defer func() {
 		type resp struct {
 			Code     int
@@ -55,7 +59,6 @@ func (s *storeImpl) IndexDocuments(_ context.Context, table string, documents io
 			var r resp
 			res, _ := io.ReadAll(closer)
 			_ = jsoniter.Unmarshal(res, &r)
-			fmt.Println(r.Code, " ", r.Error)
 			if len(r.Error) > 0 {
 				err = fmt.Errorf(r.Error)
 			}
@@ -66,7 +69,6 @@ func (s *storeImpl) IndexDocuments(_ context.Context, table string, documents io
 }
 
 func (s *storeImpl) Search(_ context.Context, table string, filterBy string) ([]tsApi.SearchResult, error) {
-	fmt.Println("table ", table, filterBy)
 	q := "*"
 	res, err := s.client.MultiSearch.Perform(&tsApi.MultiSearchParams{}, tsApi.MultiSearchSearchesParameter{
 		Searches: []tsApi.MultiSearchCollectionParameters{

@@ -16,7 +16,6 @@ package metadata
 
 import (
 	"bytes"
-	"fmt"
 	api "github.com/tigrisdata/tigris/api/server/v1"
 	"github.com/tigrisdata/tigris/keys"
 	"github.com/tigrisdata/tigris/schema"
@@ -40,10 +39,6 @@ type Encoder interface {
 	//	   to the table name to form the Key. The first element of this list is the dictionary encoding of index type key
 	//	   information i.e. whether the index is pkey, etc. The remaining elements are values for this index.
 	EncodeKey(encodedTable []byte, idx *schema.Index, idxParts []interface{}) (keys.Key, error)
-
-	// EncodeSearchTableName encodes the table name that we are using for search collection. It is simply string
-	// delimited using "-"
-	EncodeSearchTableName(ns string, db string, coll string) string
 
 	// DecodeTableName is used to decode the key stored in FDB and extract namespace name, database name and collection name.
 	DecodeTableName(tableName []byte) (string, string, string, bool)
@@ -69,10 +64,6 @@ func (d *DictKeyEncoder) EncodeTableName(ns Namespace, db *Database, coll *schem
 		return nil, api.Errorf(api.Code_INVALID_ARGUMENT, "collection is missing")
 	}
 	return d.encodedTableName(ns, db, coll), nil
-}
-
-func (d *DictKeyEncoder) EncodeSearchTableName(namespace string, database string, collection string) string {
-	return fmt.Sprintf("%s-%s-%s", namespace, database, collection)
 }
 
 func (d *DictKeyEncoder) EncodeIndexName(idx *schema.Index) []byte {

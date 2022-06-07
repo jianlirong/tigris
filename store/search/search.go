@@ -27,6 +27,7 @@ type Store interface {
 	CreateCollection(ctx context.Context, schema *tsApi.CollectionSchema) error
 	DropCollection(ctx context.Context, table string) error
 	IndexDocuments(_ context.Context, table string, documents io.Reader, options IndexDocumentsOptions) error
+	DeleteDocuments(_ context.Context, table string, key string) error
 	Search(_ context.Context, table string, filterBy string) ([]tsApi.SearchResult, error)
 }
 

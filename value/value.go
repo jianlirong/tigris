@@ -46,6 +46,13 @@ type Value interface {
 
 // NewValue returns the value of the field from the raw json value. It uses schema to get the type of the field.
 func NewValue(fieldType schema.FieldType, value []byte) (Value, error) {
+	if value[0] == '"' {
+		value = value[1:]
+	}
+	if value[len(value)-1] == '"' {
+		value = value[0 : len(value)-1]
+	}
+
 	switch fieldType {
 	case schema.BoolType:
 		b, err := strconv.ParseBool(string(value))
@@ -54,6 +61,7 @@ func NewValue(fieldType schema.FieldType, value []byte) (Value, error) {
 		}
 		return NewBoolValue(b), nil
 	case schema.DoubleType:
+		return NewStringValue(string(value)), nil
 		val, err := strconv.ParseFloat(string(value), 64)
 		if err != nil {
 			return nil, api.Errorf(api.Code_INVALID_ARGUMENT, errors.Wrap(err, "unsupported value type ").Error())
@@ -125,6 +133,9 @@ func (i *IntValue) String() string {
 type DoubleValue float64
 
 func NewDoubleValue(v float64) *DoubleValue {
+	s1 := strconv.FormatFloat(v, 'E', -1, 64)
+	s2 := fmt.Sprintf("%f", v)
+	fmt.Printf("parse float %v %s %s\n", v, s1, s2)
 	i := DoubleValue(v)
 	return &i
 }
@@ -163,6 +174,8 @@ func (d *DoubleValue) String() string {
 type StringValue string
 
 func NewStringValue(v string) *StringValue {
+	fmt.Println("String value ", v)
+	fmt.Println("String value ", v)
 	i := StringValue(v)
 	return &i
 }

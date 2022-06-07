@@ -63,7 +63,7 @@ func NewFactory(fields []*schema.Field) *Factory {
 	}
 }
 
-func (factory *Factory) Build(reqFilter []byte) ([]Filter, error) {
+func (factory *Factory) Factorize(reqFilter []byte) ([]Filter, error) {
 	if len(reqFilter) == 0 {
 		return nil, nil
 	}
@@ -210,7 +210,7 @@ func buildComparisonOperator(input jsoniter.RawMessage, field *schema.Field) (Va
 		}
 
 		switch string(key) {
-		case EQ, GT:
+		case EQ, GT, GTE, LT, LTE:
 			switch dataType {
 			case jsonparser.Boolean, jsonparser.Number, jsonparser.String, jsonparser.Null:
 				var val value.Value

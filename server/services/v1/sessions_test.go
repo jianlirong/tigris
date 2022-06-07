@@ -15,6 +15,10 @@
 package v1
 
 import (
+	"encoding/base64"
+	"fmt"
+	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
+	jsoniter "github.com/json-iterator/go"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -32,4 +36,31 @@ func TestSessionTracker(t *testing.T) {
 	sess := &QuerySession{}
 	s.add("abc", sess)
 	require.Equal(t, sess, s.get("abc"))
+}
+
+func TestMarshaling(t *testing.T) {
+	var s string = "hello"
+	b, _ := jsoniter.Marshal(s)
+	fmt.Println(s, " vs ", string(b))
+
+	var i int64 = 1
+	b, _ = jsoniter.Marshal(i)
+	fmt.Println(string(b))
+
+	var arr = []interface{}{int64(1), int64(2)}
+	tp := tuple.Tuple{int64(1), int64(2)}
+	b, _ = jsoniter.Marshal(arr)
+	fmt.Println(string(b))
+
+	b, _ = jsoniter.Marshal(tp.Pack())
+	fmt.Println(string(b))
+
+	arr = []interface{}{1, "hello"}
+	b, _ = jsoniter.Marshal(arr)
+	fmt.Println(string(b))
+
+	tp = tuple.Tuple{1, "hello"}
+	b, _ = jsoniter.Marshal(tp.Pack())
+	fmt.Println(string(b))
+	fmt.Println(base64.StdEncoding.EncodeToString(tp.Pack()))
 }

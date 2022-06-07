@@ -16,22 +16,23 @@ package v1
 
 import (
 	"context"
+	"github.com/tigrisdata/tigris/server/metadata"
 	"github.com/tigrisdata/tigris/server/transaction"
 	"github.com/tigrisdata/tigris/store/kv"
 )
 
 type TxListener interface {
-	OnCommit(context.Context, transaction.Tx, kv.EventListener) error
-	OnPostCommit(context.Context, kv.EventListener) error
-	OnRollback(context.Context, kv.EventListener)
+	OnCommit(context.Context, *metadata.Tenant, transaction.Tx, kv.EventListener) error
+	OnPostCommit(context.Context, *metadata.Tenant, kv.EventListener) error
+	OnRollback(context.Context, *metadata.Tenant, kv.EventListener)
 }
 
 type NoopTxListener struct{}
 
-func (l *NoopTxListener) OnCommit(context.Context, transaction.Tx, kv.EventListener) error {
+func (l *NoopTxListener) OnCommit(context.Context, *metadata.Tenant, transaction.Tx, kv.EventListener) error {
 	return nil
 }
-func (l *NoopTxListener) OnPostCommit(context.Context, kv.EventListener) error {
+func (l *NoopTxListener) OnPostCommit(context.Context, *metadata.Tenant, kv.EventListener) error {
 	return nil
 }
-func (l *NoopTxListener) OnRollback(context.Context, kv.EventListener) {}
+func (l *NoopTxListener) OnRollback(context.Context, *metadata.Tenant, kv.EventListener) {}

@@ -76,7 +76,7 @@ func newApiService(kv kv.KeyValueStore, searchStore search.Store) *apiService {
 		log.Fatal().Err(err).Msgf("error starting server: starting transaction failed")
 	}
 
-	tenantMgr := metadata.NewTenantManager()
+	tenantMgr := metadata.NewTenantManager(searchStore)
 	if err := tenantMgr.Reload(ctx, tx); ulog.E(err) {
 		// ToDo: no need to panic, probably handle through async thread.
 		log.Err(err).Msgf("error starting server: reloading tenants failed")
