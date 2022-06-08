@@ -12,10 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM golang:1.18-bullseye
+FROM ubuntu:jammy-20220531
 
-RUN apt-get update && apt-get install -y apt-transport-https
-RUN apt-get install -y sudo
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    apt-transport-https \
+    ca-certificates \
+    curl \
+    gcc \
+    git \
+    golang \
+    make \
+    sudo
 
 RUN mkdir -p /go/src/tigris
 

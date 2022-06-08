@@ -27,8 +27,7 @@ jobs:
       - name: Pull build docker images
         if: env.need_rebuild
         run: |
-          docker pull debian:bullseye-slim
-          docker pull golang:1.18-bullseye
+          docker pull ubuntu:jammy-20220531
 
       - name: Pull submodules
         run: git submodule update --init --recursive
@@ -37,7 +36,7 @@ jobs:
         if: env.need_rebuild
         run: |
           make docker_compose_build
-          docker image rm debian:bullseye-slim golang:1.18-bullseye
+          docker image rm ubuntu:jammy-20220531
           docker image prune -f
 
       - name: Run tests
