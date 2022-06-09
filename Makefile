@@ -80,7 +80,8 @@ upgrade_api:
 	git submodule update --remote --recursive --rebase
 
 build_tests:
-	export PATH="${PATH}:/root/go/bin"
+	PATH="${PATH}:/root/go/bin"
+	export PATH
 	echo $PATH $GOPATH && \
     	go version && \
     	find / -name protoc-gen-openapi
