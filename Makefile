@@ -10,7 +10,7 @@ DATA_PROTO_DIR=internal
 
 # Needed to be able to build amd64 binaries on MacOS M1
 DOCKER_DIR=test/docker
-DOCKER_COMPOSE=COMPOSE_DOCKER_CLI_BUILD=1 DOCKER_BUILDKIT=0 docker-compose -f ${DOCKER_DIR}/docker-compose.yml
+DOCKER_COMPOSE=COMPOSE_DOCKER_CLI_BUILD=1 DOCKER_BUILDKIT=1 docker-compose -f ${DOCKER_DIR}/docker-compose.yml
 CGO_ENABLED=1
 
 all: server
