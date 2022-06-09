@@ -86,7 +86,6 @@ case "${OS}" in
 		sudo installer -pkg "$FDB_PACKAGE_PATH" -target /
 		;;
 	"Linux")
-		sudo apt-get install -y protobuf-compiler
 		FDB_PACKAGE_NAME="FoundationDB-${FDB_VERSION}_${ARCH}.deb"
 		FDB_PACKAGE_PATH="$(mktemp -p /tmp/ -u)/${FDB_PACKAGE_NAME}"
 		curl --create-dirs -Lo "$FDB_PACKAGE_PATH" "https://tigrisdata-pub.s3.us-west-2.amazonaws.com/${FDB_PACKAGE_NAME}"
