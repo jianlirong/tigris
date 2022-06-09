@@ -80,7 +80,7 @@ upgrade_api:
 	git submodule update --remote --recursive --rebase
 
 build_tests:
-	PATH="$${PATH}:/root/go/bin"
+	PATH="$${PATH}:$${HOME}/go/bin"
 	export PATH
 	echo $${PATH} $${GOPATH} && \
     	go version && \
