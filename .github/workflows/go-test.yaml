@@ -40,7 +40,10 @@ jobs:
           docker image prune -f
 
       - name: Run tests
-        run: make build_tests
+        run: echo $PATH $GOPATH && go version && find / -name protoc-gen-openapi && make docker_test_no_build || ( docker-compose -f test/docker/docker-compose.yml logs && false )
+        shell: bash
+        env:
+          TEST_PARAM: "-coverprofile=coverage.out -covermode=atomic"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v2

@@ -78,11 +78,3 @@ clean:
 
 upgrade_api:
 	git submodule update --remote --recursive --rebase
-
-build_tests:
-	PATH="$${PATH}:$${HOME}/go/bin"
-	export PATH
-	echo $${PATH} $${GOPATH} && \
-    	go version && \
-    	find / -name protoc-gen-openapi 2>/dev/null
-	TEST_PARAM: "-coverprofile=coverage.out -covermode=atomic" make docker_test_no_build || ( docker-compose -f test/docker/docker-compose.yml logs && false )
