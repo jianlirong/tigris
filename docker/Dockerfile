@@ -34,8 +34,8 @@ COPY go.mod /build
 WORKDIR /build
 RUN go mod download
 COPY . /build
-#RUN --mount=type=cache,target=/root/.cache/go-build rm -f server/service && make bins
-RUN rm -f server/service && make bins
+RUN --mount=type=cache,target=/root/.cache/go-build rm -f server/service && make bins
+
 
 FROM ubuntu:jammy-20220531 AS server
 
