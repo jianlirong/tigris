@@ -34,8 +34,6 @@ COPY go.mod /build
 WORKDIR /build
 RUN go mod download
 COPY . /build
-ENV GO_PATH=${HOME}/go 
-ENV PATH=${PATH}:/${GO_PATH}/bin
 RUN --mount=type=cache,target=/root/.cache/go-build rm -f server/service && make bins
 
 FROM ubuntu:jammy-20220531 AS server
