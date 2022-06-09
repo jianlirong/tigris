@@ -40,9 +40,7 @@ jobs:
           docker image prune -f
 
       - name: Run tests
-        run: PATH="${PATH}:/root/go/bin" make docker_test_no_build || ( PATH="${PATH}:/root/go/bin" docker-compose -f test/docker/docker-compose.yml logs && false )
-        env:
-          TEST_PARAM: "-coverprofile=coverage.out -covermode=atomic" 
+        run: make build_tests
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v2
