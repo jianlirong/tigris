@@ -35,9 +35,6 @@ WORKDIR /build
 RUN go mod download
 COPY . /build
 RUN sh /build/install_build_deps.sh
-RUN echo $PATH $GOPATH && \
-    go version && \
-    find / -name protoc-gen-openapi
 RUN --mount=type=cache,target=/root/.cache/go-build rm -f server/service && make bins
 
 
