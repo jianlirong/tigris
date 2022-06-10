@@ -4,6 +4,7 @@ on:
   workflow_call:
 jobs:
   test:
+    runs-on: ubuntu-latest
     container: ubuntu:jammy-20220531
     steps:
       - name: Check out code
