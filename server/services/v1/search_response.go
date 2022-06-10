@@ -7,6 +7,11 @@ type SearchResponse struct {
 	Facets *FacetResponse
 }
 
+type pageResponse struct {
+	hits   *HitsResponse
+	facets *FacetResponse
+}
+
 type HitsResponse struct {
 	Hits *[]tsApi.SearchResultHit
 }
@@ -16,6 +21,10 @@ func NewHitsResponse() *HitsResponse {
 	return &HitsResponse{
 		Hits: &hits,
 	}
+}
+
+func (h *HitsResponse) Count() int {
+	return len(*h.Hits)
 }
 
 func (h *HitsResponse) Append(hits *[]tsApi.SearchResultHit) {

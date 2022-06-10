@@ -3,6 +3,7 @@ package v1
 import (
 	"context"
 	"encoding/json"
+	"github.com/tigrisdata/tigris/schema"
 
 	"github.com/tigrisdata/tigris/internal"
 	"github.com/tigrisdata/tigris/keys"
@@ -21,23 +22,87 @@ type Row struct {
 }
 
 type RowReader interface {
-	NextRow(row *Row) bool
+	NextRow(ctx context.Context, row *Row) bool
 	Err() error
 }
 
-type SearchRowReader struct {
-	idx    int
-	err    error
-	result *SearchResponse
+type page struct {
+	idx        int
+	err        error
+	resp       *pageResponse
+	collection *schema.DefaultCollection
 }
 
-func MakeSearchRowReader(ctx context.Context, table string, _ []read.Field, filters []filter.Filter, store search.Store) (*SearchRowReader, error) {
+func (p *page) readRow(row *Row) bool {
+	if p.err != nil {
+		return false
+	}
+
+	for {
+		document, more := p.resp.hits.GetDocument(p.idx)
+		if !more {
+			break
+		}
+
+		if document == nil {
+			p.idx++
+			continue
+		}
+
+		if p.err = UnpackSearchFields(document, p.collection); p.err != nil {
+			return false
+		}
+
+		data, err := json.Marshal(*document)
+		if err != nil {
+			p.err = err
+			return false
+		}
+
+		row.Key = []byte((*document)[searchID].(string))
+		row.Data = &internal.TableData{RawData: data}
+		break
+	}
+	hasNext := p.resp.hits.HasMoreHits(p.idx)
+	p.idx++
+
+	return hasNext
+}
+
+type SearchRowReader struct {
+	pageNo     int
+	perPage    int
+	page       *page
+	err        error
+	store      search.Store
+	filter     string
+	result     *SearchResponse
+	collection *schema.DefaultCollection
+}
+
+func MakeSearchRowReader(ctx context.Context, collection *schema.DefaultCollection, _ []read.Field, filters []filter.Filter, store search.Store) (*SearchRowReader, error) {
 	builder := qsearch.NewBuilder()
 	searchFilter := builder.FromFilter(filters)
 
-	result, err := store.Search(ctx, table, searchFilter)
+	s := &SearchRowReader{
+		pageNo:     1,
+		perPage:    5,
+		store:      store,
+		filter:     searchFilter,
+		collection: collection,
+	}
+
+	return s, nil
+}
+
+func MakeSearchRowReaderUsingFilter(ctx context.Context, collection *schema.DefaultCollection, filters []filter.Filter, store search.Store) (*SearchRowReader, error) {
+	return MakeSearchRowReader(ctx, collection, nil, filters, store)
+}
+
+func (s *SearchRowReader) readPage(ctx context.Context) (bool, error) {
+	result, err := s.store.Search(ctx, s.collection.SearchSchema.Name, s.filter, s.pageNo, s.perPage)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 
 	var hitsResp = NewHitsResponse()
@@ -45,48 +110,38 @@ func MakeSearchRowReader(ctx context.Context, table string, _ []read.Field, filt
 		hitsResp.Append(r.Hits)
 	}
 
-	var s = &SearchResponse{
-		Hits:   hitsResp,
-		Facets: CreateFacetResponse(result[0].FacetCounts),
+	s.page = &page{
+		idx:        0,
+		collection: s.collection,
+		resp: &pageResponse{
+			hits:   hitsResp,
+			facets: CreateFacetResponse(result[0].FacetCounts),
+		},
 	}
 
-	return &SearchRowReader{
-		idx:    0,
-		result: s,
-	}, nil
+	return hitsResp.Count() < s.perPage, nil
 }
 
-func MakeSearchRowReaderUsingFilter(ctx context.Context, table string, filters []filter.Filter, store search.Store) (*SearchRowReader, error) {
-	return MakeSearchRowReader(ctx, table, nil, filters, store)
-}
-
-func (s *SearchRowReader) NextRow(row *Row) bool {
+func (s *SearchRowReader) NextRow(ctx context.Context, row *Row) bool {
 	for {
-		document, more := s.result.Hits.GetDocument(s.idx)
-		if !more {
-			break
+		var lastPage bool
+		if s.page == nil {
+			if lastPage, s.err = s.readPage(ctx); s.err != nil {
+				return false
+			}
 		}
 
-		if document == nil {
-			s.idx++
-			continue
+		if s.page.readRow(row) {
+			return true
 		}
 
-		data, err := json.Marshal(*document)
-		if err != nil {
-			s.err = err
+		if lastPage {
 			return false
 		}
-		row.Key = []byte((*document)[searchID].(string))
-		row.Data = &internal.TableData{
-			RawData: data,
-		}
-		break
-	}
-	hasNext := s.result.Hits.HasMoreHits(s.idx)
-	s.idx++
 
-	return hasNext
+		s.page = nil
+		s.pageNo++
+	}
 }
 
 func (s *SearchRowReader) GetFacet() *FacetResponse {
@@ -94,6 +149,9 @@ func (s *SearchRowReader) GetFacet() *FacetResponse {
 }
 
 func (s *SearchRowReader) Err() error {
+	if s.page != nil && s.page.err != nil {
+		return s.page.err
+	}
 	return s.err
 }
 
@@ -120,7 +178,7 @@ func MakeDatabaseRowReader(ctx context.Context, tx transaction.Tx, keys []keys.K
 	return d, nil
 }
 
-func (d *DatabaseRowReader) NextRow(row *Row) bool {
+func (d *DatabaseRowReader) NextRow(ctx context.Context, row *Row) bool {
 	if d.err != nil {
 		return false
 	}

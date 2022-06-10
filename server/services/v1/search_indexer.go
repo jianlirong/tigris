@@ -22,6 +22,7 @@ import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/subspace"
 	"github.com/buger/jsonparser"
+	jsoniter "github.com/json-iterator/go"
 	"github.com/tigrisdata/tigris/internal"
 	"github.com/tigrisdata/tigris/schema"
 	"github.com/tigrisdata/tigris/server/metadata"
@@ -91,12 +92,12 @@ func (i *SearchIndexer) OnPostCommit(ctx context.Context, tenant *metadata.Tenan
 				return err
 			}
 
-			// modify the raw data in place, string needs to be quoted
-			if tableData.RawData, err = jsonparser.Set(tableData.RawData, []byte(fmt.Sprintf(`"%s"`, searchKey)), searchID); err != nil {
+			searchData, err := PackSearchFields(tableData.RawData, collection, searchKey)
+			if err != nil {
 				return err
 			}
 
-			reader := bytes.NewReader(tableData.RawData)
+			reader := bytes.NewReader(searchData)
 			if err = i.searchStore.IndexDocuments(ctx, collection.SearchSchema.Name, reader, search.IndexDocumentsOptions{
 				Action:    action,
 				BatchSize: 1,
@@ -151,4 +152,54 @@ func CreateSearchKey(table []byte, fdbKey []byte) (string, error) {
 		// for composite there is no easy way, pack it and then base64 encode it
 		return base64.StdEncoding.EncodeToString(tp.Pack()), nil
 	}
+}
+
+func PackSearchFields(doc []byte, collection *schema.DefaultCollection, id string) ([]byte, error) {
+	var complexFields []string
+	for _, f := range collection.Fields {
+		if schema.PackSearchField(f) {
+			complexFields = append(complexFields, f.FieldName)
+		}
+	}
+
+	var err error
+	if len(complexFields) > 0 {
+		// better to decode it and then update the JSON
+		var data map[string]interface{}
+		if err = jsoniter.Unmarshal(doc, &data); err != nil {
+			return nil, err
+		}
+
+		for _, complex := range complexFields {
+			if value, ok := data[complex]; ok {
+				if data[complex], err = jsoniter.MarshalToString(value); err != nil {
+					return nil, err
+				}
+			}
+		}
+		data[searchID] = id
+
+		return jsoniter.Marshal(data)
+	} else if doc, err = jsonparser.Set(doc, []byte(fmt.Sprintf(`"%s"`, id)), searchID); err != nil {
+		return nil, err
+	}
+
+	return doc, nil
+}
+
+func UnpackSearchFields(doc *map[string]interface{}, collection *schema.DefaultCollection) error {
+	for _, f := range collection.Fields {
+		if schema.PackSearchField(f) {
+			if v, ok := (*doc)[f.FieldName]; ok {
+				var value interface{}
+				if err := jsoniter.UnmarshalFromString(v.(string), &value); err != nil {
+					return err
+				}
+				(*doc)[f.FieldName] = value
+			}
+
+		}
+	}
+
+	return nil
 }

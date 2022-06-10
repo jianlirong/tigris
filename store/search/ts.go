@@ -48,6 +48,10 @@ func (s *storeImpl) IndexDocuments(_ context.Context, table string, documents io
 		Action:    &options.Action,
 		BatchSize: &options.BatchSize,
 	})
+	if err != nil {
+		fmt.Println("error is not nil ", err)
+	}
+	fmt.Println("closer ", closer)
 	defer func() {
 		type resp struct {
 			Code     int
@@ -68,7 +72,7 @@ func (s *storeImpl) IndexDocuments(_ context.Context, table string, documents io
 	return err
 }
 
-func (s *storeImpl) Search(_ context.Context, table string, filterBy string) ([]tsApi.SearchResult, error) {
+func (s *storeImpl) Search(_ context.Context, table string, filterBy string, page int, perPage int) ([]tsApi.SearchResult, error) {
 	q := "*"
 	res, err := s.client.MultiSearch.Perform(&tsApi.MultiSearchParams{}, tsApi.MultiSearchSearchesParameter{
 		Searches: []tsApi.MultiSearchCollectionParameters{
@@ -77,6 +81,8 @@ func (s *storeImpl) Search(_ context.Context, table string, filterBy string) ([]
 				MultiSearchParameters: tsApi.MultiSearchParameters{
 					FilterBy: &filterBy,
 					Q:        &q,
+					Page:     &page,
+					PerPage:  &perPage,
 				},
 			},
 		},

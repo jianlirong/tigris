@@ -168,7 +168,7 @@ func TestCollection_SchemaValidate(t *testing.T) {
 		schFactory, err := Build("t1", reqSchema)
 		require.NoError(t, err)
 
-		coll := NewDefaultCollection("t1", 1, schFactory.Fields, schFactory.Indexes, schFactory.Schema)
+		coll := NewDefaultCollection("t1", 1, schFactory.Fields, schFactory.Indexes, schFactory.Schema, "")
 
 		dec := jsoniter.NewDecoder(bytes.NewReader(c.document))
 		dec.UseNumber()

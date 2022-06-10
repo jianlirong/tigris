@@ -28,7 +28,7 @@ type Store interface {
 	DropCollection(ctx context.Context, table string) error
 	IndexDocuments(_ context.Context, table string, documents io.Reader, options IndexDocumentsOptions) error
 	DeleteDocuments(_ context.Context, table string, key string) error
-	Search(_ context.Context, table string, filterBy string) ([]tsApi.SearchResult, error)
+	Search(_ context.Context, table string, filterBy string, page int, perPage int) ([]tsApi.SearchResult, error)
 }
 
 func NewStore(config *config.SearchConfig) (Store, error) {
