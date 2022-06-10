@@ -19,6 +19,7 @@ jobs:
             golang \
             make \
             sudo
+          git config --global --add safe.directory /__w/tigris/tigris
 
       - name: Check out code
         uses: actions/checkout@v1
