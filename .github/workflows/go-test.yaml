@@ -7,6 +7,19 @@ jobs:
     runs-on: ubuntu-latest
     container: ubuntu:jammy-20220531
     steps:
+      - name: Setup container
+        run: |
+          apt-get update
+          apt-get install -y --no-recommends \
+            apt-transport-https \
+            ca-certificates \
+            curl \
+            gcc \
+            git \
+            golang \
+            make \
+            sudo
+
       - name: Check out code
         uses: actions/checkout@v1
 
